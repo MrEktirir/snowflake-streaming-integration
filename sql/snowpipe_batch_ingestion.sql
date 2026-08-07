@@ -1,1 +1,94 @@
+CREATE OR REPLACE DATABASE hol_streaming;
 
+USE DATABASE hol_streaming;
+
+CREATE OR REPLACE WAREHOUSE hol_streaming_wh WITH WAREHOUSE_SIZE='XSMALL' MIN_CLUSTER_COUNT = 1 MAX_CLUSTER_COUNT=1 AUTO_SUSPEND=60;
+
+
+CREATE OR REPLACE TABLE stg_customer (
+    raw_json        VARIANT,
+    file_name       STRING NOT NULL,
+    file_row_seq    NUMBER NOT NULL,
+    ldts            STRING NOT NULL
+);
+
+CREATE OR REPLACE TABLE stg_orders(
+    o_orderkey      NUMBER,
+    o_custkey       NUMBER,
+    o_orderstatus   STRING,
+    o_totalprice    NUMBER,
+    o_orderdate     DATE,
+    o_orderpriority STRING,
+    o_clerk         STRING,
+    o_shippriority  NUMBER,
+    o_comment       STRING,
+    filename        STRING  NOT NULL,
+    file_row_seq    NUMBER  NOT NULL,
+    ldts            STRING  NOT NULL
+)
+
+CREATE OR REPLACE STAGE customer_data FILE_FORMAT = (TYPE = JSON);
+CREATE OR REPLACE STAGE orders_data   FILE_FORMAT = (TYPE = CSV);
+
+
+COPY INTO @customer_data 
+FROM
+(SELECT object_construct(*)
+  FROM snowflake_sample_data.tpch_sf10.customer limit 10
+) 
+INCLUDE_QUERY_ID=TRUE;
+
+COPY INTO @orders_data 
+FROM
+(SELECT *
+  FROM snowflake_sample_data.tpch_sf10.orders limit 1000
+) 
+INCLUDE_QUERY_ID=TRUE;
+
+list@customer_data;
+SELECT METADATA$FILENAME,$1 FROM @customer_data;
+
+CREATE OR REPLACE PIPE stg_orders_pp 
+AS 
+COPY INTO stg_orders 
+FROM
+(
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 
+     , metadata$filename
+     , metadata$file_row_number
+     , CURRENT_TIMESTAMP()
+  FROM @orders_data
+);
+
+CREATE OR REPLACE PIPE stg_customer_pp 
+AS 
+COPY INTO stg_customer
+FROM 
+(
+SELECT $1
+     , metadata$filename
+     , metadata$file_row_number
+     , CURRENT_TIMESTAMP()
+  FROM @customer_data
+);
+
+ALTER PIPE stg_customer_pp REFRESH;
+
+ALTER PIPE stg_orders_pp   REFRESH;
+
+SELECT 'stg_customer', count(1) FROM stg_customer
+UNION ALL
+SELECT 'stg_orders', count(1) FROM stg_orders;
+
+select pipe_received_time, last_load_time,src.*
+from table(information_schema.copy_history(table_name=>'STG_CUSTOMER', start_time=> dateadd(hours, -1, current_timestamp()))) src;
+
+select *
+  from table(information_schema.pipe_usage_history(
+    date_range_start=>dateadd('hour',-12,current_timestamp()),
+    pipe_name=>'STG_CUSTOMER_PP'))
+union all
+select *
+  from table(information_schema.pipe_usage_history(
+    date_range_start=>dateadd('hour',-12,current_timestamp()),
+    pipe_name=>'STG_ORDERS_PP'));
