@@ -168,3 +168,41 @@ WHEN NOT MATCHED THEN
 ;
 
 COMMIT;
+
+
+
+--  Automation using Snowflake tasks
+
+ALTER STAGE customer_data REFRESH;
+SELECT * FROM DIRECTORY(@customer_data);
+SELECT * FROM customer_data_files_stream;
+
+CREATE OR REPLACE TASK tsk_customer_data_load
+    USER_TASK_MANAGED_INITIAL_WAREHOUSE_SIZE = 'XSMALL'
+    SCHEDULE = '1 minute'
+WHEN
+    SYSTEM$STREAM_HAS_DATA('CUSTOMER_DATA_FILES_STREAM')
+AS
+COPY INTO stg_customer
+FROM
+(
+SELECT $1
+    , metadata$filename
+    , metadata$file_row_number
+    , CURRENT_TIMESTAMP()
+    FROM @customer_data
+);
+
+ALTER TASK tsk_customer_data_load RESUME;
+EXECUTE TASK tsk_customer_data_load;
+
+-- Observability --
+USE DATABASE HOL_STREAMING;
+USE SCHEMA PUBLIC;
+SHOW TASKS;
+
+SELECT *
+  FROM TABLE(information_schema.serverless_task_history(
+    date_range_start=>dateadd(d, -7, current_date),
+    date_range_end=>current_date,
+    task_name=>'TSK_CUSTOMER_DATA_LOAD'));
