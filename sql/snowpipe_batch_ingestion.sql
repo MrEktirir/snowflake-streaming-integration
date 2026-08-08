@@ -92,3 +92,79 @@ select *
   from table(information_schema.pipe_usage_history(
     date_range_start=>dateadd('hour',-12,current_timestamp()),
     pipe_name=>'STG_ORDERS_PP'));
+
+
+-- COPY COMMAND -- 
+
+CREATE OR REPLACE DATABASE hol_streaming;
+
+CREATE OR REPLACE TABLE stg_customer
+(
+    raw_json            VARIANT
+, filename            STRING   NOT NULL
+, file_row_seq        NUMBER   NOT NULL
+, ldts                STRING   NOT NULL
+);
+
+-- Hedef tablo sütunlarını büyük harfle (Snowflake standartlarına uygun) tanımlıyoruz
+CREATE OR REPLACE TABLE customer_target 
+( 
+  C_ACCTBAL         NUMBER
+, C_NAME              STRING
+, C_MKTSEGMENT        STRING
+);
+
+CREATE OR REPLACE STAGE customer_data 
+FILE_FORMAT = (TYPE = JSON) 
+DIRECTORY = (ENABLE = TRUE);
+
+CREATE OR REPLACE STREAM customer_data_files_stream ON STAGE customer_data;
+
+
+-- =====================================================================
+-- BÖLÜM 2: ÖRNEK VERİYİ STAGE ALANINA YÜKLEME (COPY INTO STAGE)
+-- =====================================================================
+
+COPY INTO @customer_data 
+FROM
+(
+  SELECT OBJECT_CONSTRUCT(*)
+  FROM snowflake_sample_data.tpch_sf10.customer
+) 
+INCLUDE_QUERY_ID = TRUE;
+
+
+
+
+BEGIN TRANSACTION;
+
+-- 1. Adım: Stage'deki ham verileri stg_customer tablosuna çek
+COPY INTO stg_customer
+FROM 
+(
+  SELECT $1
+       , METADATA$FILENAME
+       , METADATA$FILE_ROW_NUMBER
+       , CURRENT_TIMESTAMP()
+  FROM @customer_data
+);
+
+-- 2. Adım: Ham verileri parse edip hedef tabloya MERGE et
+MERGE INTO customer_target AS t
+USING 
+(
+  SELECT raw_json:C_ACCTBAL::number    AS c_acctbal
+       , raw_json:C_NAME::string       AS c_name
+       , raw_json:C_MKTSEGMENT::string AS c_mktsegment
+  FROM stg_customer
+) AS s
+ON t.C_NAME = s.c_name 
+   AND t.C_MKTSEGMENT = s.c_mktsegment
+WHEN MATCHED THEN 
+    UPDATE SET t.C_ACCTBAL = s.c_acctbal
+WHEN NOT MATCHED THEN 
+    INSERT (C_ACCTBAL, C_NAME, C_MKTSEGMENT) 
+    VALUES (s.c_acctbal, s.c_name, s.c_mktsegment)
+;
+
+COMMIT;
