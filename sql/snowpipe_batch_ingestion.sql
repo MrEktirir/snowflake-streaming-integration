@@ -206,3 +206,35 @@ SELECT *
     date_range_start=>dateadd(d, -7, current_date),
     date_range_end=>current_date,
     task_name=>'TSK_CUSTOMER_DATA_LOAD'));
+
+
+-- Streaming Snowpipe --
+
+SELECT object_construct(*)
+  FROM snowflake_sample_data.tpch_sf10.customer limit 200;
+
+-- Identity cross-check --
+
+CREATE OR REPLACE USER snowpipe_streaming_user 
+  password='' 
+  default_role = accountadmin 
+  rsa_public_key='MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtVa55Fc1VNy1QNZH4An/43Dt548scHC47SGYiK6e1+R8zYm3NIp0cPQAPyLk3s/rjl0GxZCIXVbUM2Msle8st8aP75G4hzwDzW/43xgCzHfRbrn4XMmIdWQs3cIRCHxvVG6iv4EZoe/hg/+31zKVl5vmoU4cAeRun/AMi5c4pocY8OtohwfQAhMJi1Dz/UxQM7AXcj2fKxxRk6Nbxrf1x7YdyDlSORnj6Py+zRBlHYDyFTQYKG/IrpWxXv4w/I2lntT3I2yTP4bpZ67DIbIG9DbiAl3mc8+vAtHj2M4blJI9t855gGw1K98XDL/BGMzqqP+ANpJ/XpLAOkD2elvFiwIDAQAB';
+
+grant role accountadmin  to user snowpipe_streaming_user;
+
+SELECT object_construct(*)
+  FROM snowflake_sample_data.tpch_sf10.customer limit 200;
+
+
+SELECT TO_TIMESTAMP(TO_NUMBER(record_metadata:CreateTime), 3) create_timestamp
+    ,    src.record_content:C_ACCTBAL::NUMBER C_ACCBAL
+    ,    src.record_content:C_NAME::STRING    C_NAME
+    ,    src.record_content
+FROM HOL_STREAMING.PUBLIC.CUSTOMER_DATA_STREAM_STG src;
+
+
+-- CLEAN STAGE
+USE ROLE ACCOUNTADMIN;
+DROP DATABASE hol_streaming;
+DROP WAREHOUSE hol_streaming_wh;
+DROP USER snowpipe_streaming_user;
